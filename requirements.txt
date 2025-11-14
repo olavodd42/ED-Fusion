@@ -1,4 +1,4 @@
-# requirements.txt
+# ED-Fusion Requirements
 
 # ===== Core ML/DL =====
 torch==2.1.0
@@ -41,7 +41,10 @@ tqdm==4.66.1
 jupyter==1.0.0
 ipywidgets==8.1.1
 tensorboard==2.15.1
+pyyaml>=5.4.0
 
-# ===== Testing =====
+# ===== Development =====
 pytest==7.4.3
 pytest-cov==4.1.0
+black>=22.0.0
+flake8>=4.0.0
