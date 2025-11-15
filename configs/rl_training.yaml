@@ -1,0 +1,25 @@
+# Configuração para Reinforcement Learning (PPO)
+
+rl:
+  algorithm: "PPO"
+  total_timesteps: 100000
+  learning_rate: 3e-4
+  n_steps: 2048
+  batch_size: 64
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+reward:
+  clinical_accuracy_weight: 0.4
+  timeliness_weight: 0.3
+  resource_efficiency_weight: 0.3
+  
+environment:
+  max_episode_steps: 100
+  observation_space_dim: 512
+  action_space_dim: 10

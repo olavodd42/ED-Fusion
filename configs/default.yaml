@@ -1,0 +1,37 @@
+# Configuração padrão do ED-Copilot
+
+# Caminhos
+paths:
+  data_root: "./data"
+  raw_data: "./data/raw"
+  processed_data: "./data/processed"
+  checkpoints: "./results/checkpoints"
+  logs: "./results/logs"
+
+# Dados
+data:
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  random_seed: 42
+  max_sequence_length: 512
+
+# Features
+features:
+  extract_labs: false  # Set to true to extract lab features (requires more memory)
+  lab_time_window_hours: 12
+  calculate_lab_costs: true
+
+# Modelo
+model:
+  base_model: "microsoft/BioGPT-Large"
+  hidden_size: 768
+  num_attention_heads: 12
+  num_hidden_layers: 12
+  dropout: 0.1
+  
+# Hardware
+hardware:
+  device: "cuda"
+  mixed_precision: true
+  num_workers: 4
