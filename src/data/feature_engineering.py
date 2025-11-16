@@ -178,7 +178,6 @@ class FeatureEngineer:
         
         # 5. CHIEF COMPLAINT (manter como texto para processamento posterior)
         if 'chiefcomplaint' in df.columns:
-            # df['triage_chief_complaint'] = df['chiefcomplaint'].fillna('')
             if df['chiefcomplaint'].dtype.name == 'category':
                 df['triage_chief_complaint'] = df['chiefcomplaint'].astype(str).replace('nan', '')
             else:
@@ -192,13 +191,16 @@ class FeatureEngineer:
         # Completude por feature
         completeness = {}
         for col in triage_cols:
-            if df[col].dtype in ['float64', 'int64']:
+            if col != 'triage_chief_complaint' and df[col].dtype in ['float64', 'float32', 'int64', 'int32']:
                 completeness[col] = df[col].notna().sum() / len(df) * 100
         
         if completeness:
             logger.info("\n📊 Completude das features:")
             for col, pct in sorted(completeness.items(), key=lambda x: -x[1]):
                 logger.info(f"  {col:30s}: {pct:5.1f}%")
+        
+        # ATUALIZAR self.df com as features extraídas
+        self.df = df
         
         return df
     
@@ -211,27 +213,36 @@ class FeatureEngineer:
         Extrai features de laboratório nos primeiros X horas do ED.
         Agrupa em 12 categorias conforme Tabela 7 do paper.
         
+        **IMPORTANTE**: Este método PRESERVA as features de triagem previamente extraídas.
+        
         Parâmetros:
             time_window_hours: Janela temporal (padrão 12h)
             use_first_value: Se True, usa primeiro valor de cada lab
         
         Retorna:
-            DataFrame com features de laboratório agregadas por grupo
+            DataFrame com features de triagem + laboratório
         """
         logger.info("\n" + "="*60)
         logger.info("🔬 EXTRAÇÃO DE LABORATORY FEATURES")
         logger.info("="*60)
         
+        # Usar self.df que já pode ter features de triagem
+        df_base = self.df.copy()
+        
         if self.lab_data.empty:
             logger.warning("⚠️  Dados de laboratório não disponíveis")
-            return self._add_empty_lab_features(self.df)
+            df_result = self._add_empty_lab_features(df_base)
+            self.df = df_result
+            return df_result
         
         # 1. Filtrar labs na janela temporal
         labs_filtered = self._filter_labs_by_time(time_window_hours)
         
         if labs_filtered.empty:
             logger.warning("⚠️  Nenhum lab encontrado na janela temporal")
-            return self._add_empty_lab_features(self.df)
+            df_result = self._add_empty_lab_features(df_base)
+            self.df = df_result
+            return df_result
         
         # 2. Mapear itemids para grupos
         labs_filtered = self._assign_lab_groups(labs_filtered)
@@ -239,14 +250,22 @@ class FeatureEngineer:
         # 3. Agregar por grupo (otimizado com pandas groupby)
         lab_features = self._aggregate_labs_efficient(labs_filtered, use_first_value)
         
-        # 4. Merge com DataFrame principal
-        df_result = self.df.merge(lab_features, on='stay_id', how='left')
+        # 4. Merge com DataFrame base (PRESERVANDO TODAS AS COLUNAS EXISTENTES)
+        df_result = df_base.merge(lab_features, on='stay_id', how='left')
+        
+        logger.info(f"\n  ℹ️  Features preservadas após merge:")
+        logger.info(f"     Colunas antes: {df_base.shape[1]}")
+        logger.info(f"     Colunas depois: {df_result.shape[1]}")
+        logger.info(f"     Colunas adicionadas: {df_result.shape[1] - df_base.shape[1]}")
         
         # 5. Preencher valores ausentes (labs não solicitados)
         df_result = self._fill_missing_labs(df_result)
         
         # 6. Adicionar flags de utilização
         df_result = self._add_lab_utilization_flags(df_result)
+        
+        # ATUALIZAR self.df com o resultado completo
+        self.df = df_result
         
         logger.info(f"\n✅ Features de laboratório extraídas")
         
@@ -255,9 +274,13 @@ class FeatureEngineer:
     def _filter_labs_by_time(self, hours: int) -> pd.DataFrame:
         """Filtra labs na janela temporal do ED"""
         
+        # Usar apenas colunas necessárias para o merge
+        merge_cols = ['stay_id', 'subject_id', 'hadm_id', 'intime']
+        available_cols = [c for c in merge_cols if c in self.df.columns]
+        
         # Merge com edstays para ter timestamps
         labs = self.lab_data.merge(
-            self.df[['stay_id', 'subject_id', 'hadm_id', 'intime']],
+            self.df[available_cols],
             on=['subject_id', 'hadm_id'],
             how='inner'
         )
@@ -390,11 +413,12 @@ class FeatureEngineer:
         
         # Calcular total de grupos solicitados
         ordered_cols = [c for c in df.columns if c.endswith('_ordered')]
-        df['total_lab_groups_ordered'] = df[ordered_cols].sum(axis=1)
-        
-        logger.info(f"\n  📊 Utilização de labs:")
-        logger.info(f"    Média de grupos por paciente: {df['total_lab_groups_ordered'].mean():.2f}")
-        logger.info(f"    Pacientes sem labs: {(df['total_lab_groups_ordered'] == 0).sum()}")
+        if ordered_cols:
+            df['total_lab_groups_ordered'] = df[ordered_cols].sum(axis=1)
+            
+            logger.info(f"\n  📊 Utilização de labs:")
+            logger.info(f"    Média de grupos por paciente: {df['total_lab_groups_ordered'].mean():.2f}")
+            logger.info(f"    Pacientes sem labs: {(df['total_lab_groups_ordered'] == 0).sum()}")
         
         return df
     
@@ -430,20 +454,17 @@ class FeatureEngineer:
                 
                 # Sequential (soma)
                 df.loc[ordered_mask, 'lab_time_cost_sequential'] += time_cost
-                
-                # Parallel (máximo) - calcular depois
-                
-                # Mixed (média ponderada: 70% parallel + 30% sequential)
-                # Aproximação mais realista
         
         # Calcular parallel (máximo time-cost dos grupos solicitados)
-        for idx, row in df.iterrows():
+        max_costs = []
+        for _, row in df.iterrows():
             max_cost = 0
             for group, time_cost in self.group_time_costs.items():
                 if row.get(f'lab_{group}_ordered', 0) == 1:
                     max_cost = max(max_cost, time_cost)
-            
-            df.loc[idx, 'lab_time_cost_parallel'] = max_cost
+            max_costs.append(max_cost)
+        
+        df['lab_time_cost_parallel'] = max_costs
         
         # Mixed strategy
         df['lab_time_cost_mixed'] = (
@@ -470,6 +491,9 @@ class FeatureEngineer:
             avg_pct = df['lab_time_pct_of_los'].mean()
             logger.info(f"\n  ⏱️  Labs representam {avg_pct:.1f}% do ED LOS em média")
         
+        # ATUALIZAR self.df
+        self.df = df
+        
         return df
     
     # ========== FEATURE SUMMARY ==========
@@ -480,9 +504,9 @@ class FeatureEngineer:
         summary = []
         
         # Triage features
-        triage_cols = [c for c in df.columns if c.startswith('triage_')]
+        triage_cols = [c for c in df.columns if c.startswith('triage_') and c != 'triage_chief_complaint']
         for col in triage_cols:
-            if df[col].dtype in ['float64', 'int64']:
+            if df[col].dtype in ['float64', 'float32', 'int64', 'int32']:
                 summary.append({
                     'Feature': col,
                     'Tipo': 'Triage',
